@@ -23,9 +23,10 @@ ISSUE_NUMBER = os.environ["ISSUE_NUMBER"]
 GITHUB_TOKEN = os.environ["GITHUB_TOKEN"]
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 HF_API_KEY = os.environ.get("HF_API_KEY")
-# Sztywno ustawiony najnowszy model
+
 GEMINI_MODEL = "gemini-3.6-flash"
-HF_MODEL = os.environ.get("HF_MODEL") or "timbrooks/instruct-pix2pix"
+# Przejście na najbardziej stabilny, w pełni wspierany model image-to-image
+HF_MODEL = os.environ.get("HF_MODEL") or "runwayml/stable-diffusion-v1-5"
 
 if not GEMINI_API_KEY:
     raise RuntimeError("Brak sekretu GEMINI_API_KEY")
@@ -114,7 +115,6 @@ krzewów wzdłuż płotu. Nie dodawaj ludzi, samochodów ani nowych budynków.
                 print(f"Próba {attempt + 1}/{max_retries}: Serwery Google przeciążone (503). Czekam 10 sekund...")
                 time.sleep(10)
             else:
-                # Jeśli błąd to nie 503, wyrzucamy go od razu, żeby nie marnować czasu
                 raise RuntimeError(f"Krytyczny błąd Gemini: {error_str}")
 
     if not result:
@@ -129,6 +129,7 @@ krzewów wzdłuż płotu. Nie dodawaj ludzi, samochodów ani nowych budynków.
 
 def render(source: Path, image_prompt: str) -> Path:
     client = InferenceClient(api_key=HF_API_KEY, timeout=300)
+    print(f"Generuję obraz przy użyciu modelu: {HF_MODEL}...")
     result = client.image_to_image(
         image=str(source),
         prompt=image_prompt,
