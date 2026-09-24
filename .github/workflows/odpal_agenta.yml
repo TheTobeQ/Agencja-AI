@@ -1,0 +1,26 @@
+name: Agent Nieruchomosci AI
+
+on:
+  issues:
+    types: [opened]
+
+jobs:
+  uruchom-system:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Pobierz kod
+        uses: actions/checkout@v4
+
+      - name: Zainstaluj biblioteki
+        run: pip install requests google-generativeai
+
+      - name: Uruchom Agenta
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          HF_API_KEY: ${{ secrets.HF_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_URL: ${{ github.event.issue.comments_url }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+        run: python agent.py
