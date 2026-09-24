@@ -25,7 +25,6 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 HF_API_KEY = os.environ.get("HF_API_KEY")
 
 GEMINI_MODEL = "gemini-3.6-flash"
-# Przejście na najbardziej stabilny, w pełni wspierany model image-to-image
 HF_MODEL = os.environ.get("HF_MODEL") or "runwayml/stable-diffusion-v1-5"
 
 if not GEMINI_API_KEY:
@@ -80,7 +79,24 @@ def download_source(url: str) -> Path:
 
 def creative_director(source: Path) -> tuple[str, str]:
     client = genai.Client(api_key=GEMINI_API_KEY)
+    
+    print("Wysyłam plik do Google...")
     uploaded = client.files.upload(file=source)
+    
+    print("Oczekuję na weryfikację pliku przez chmurę Google (omijanie błędu 503)...")
+    file_ready = False
+    for _ in range(30):
+        file_info = client.files.get(name=uploaded.name)
+        if file_info.state.name == "ACTIVE":
+            print("Plik poprawnie przetworzony przez Google!")
+            file_ready = True
+            break
+        elif file_info.state.name == "FAILED":
+            raise RuntimeError("Google odrzuciło plik jako uszkodzony.")
+        time.sleep(2)
+        
+    if not file_ready:
+        raise RuntimeError("Przekroczono limit czasu oczekiwania na Google API.")
 
     prompt = """
 Jesteś Dyrektorem Kreatywnym agencji nieruchomości. Przeanalizuj zdjęcie domu.
@@ -93,32 +109,15 @@ Zwróć WYŁĄCZNIE poprawny JSON bez markdownu:
 }
 W image_prompt koniecznie zaznacz: zachowanie domu i ogrodzenia, zamianę piasku
 na równy zielony trawnik, nowoczesny podjazd z kostki do drzwi oraz kilka małych
-krzewów wzdłuż płotu. Nie dodawaj ludzi, samochodów ani nowych budynków.
+krzewów wzdłuż płotu.
 """
     
-    result = None
-    max_retries = 10
-    
-    print(f"Uruchamiam agresywne zapytania do {GEMINI_MODEL}...")
-    for attempt in range(max_retries):
-        try:
-            result = client.models.generate_content(
-                model=GEMINI_MODEL,
-                contents=[prompt, uploaded],
-                config=types.GenerateContentConfig(response_mime_type="application/json"),
-            )
-            print(f"Sukces w próbie {attempt + 1}!")
-            break
-        except Exception as e:
-            error_str = str(e)
-            if "503" in error_str:
-                print(f"Próba {attempt + 1}/{max_retries}: Serwery Google przeciążone (503). Czekam 10 sekund...")
-                time.sleep(10)
-            else:
-                raise RuntimeError(f"Krytyczny błąd Gemini: {error_str}")
-
-    if not result:
-        raise RuntimeError(f"Poddałem się po {max_retries} próbach. Serwery Google leżą.")
+    print(f"Rozpoczynam generowanie w {GEMINI_MODEL}...")
+    result = client.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=[prompt, uploaded],
+        config=types.GenerateContentConfig(response_mime_type="application/json"),
+    )
 
     data = json.loads(result.text)
     image_prompt = str(data["image_prompt"]).strip()
@@ -129,12 +128,20 @@ krzewów wzdłuż płotu. Nie dodawaj ludzi, samochodów ani nowych budynków.
 
 def render(source: Path, image_prompt: str) -> Path:
     client = InferenceClient(api_key=HF_API_KEY, timeout=300)
-    print(f"Generuję obraz przy użyciu modelu: {HF_MODEL}...")
-    result = client.image_to_image(
-        image=str(source),
-        prompt=image_prompt,
-        model=HF_MODEL,
-    )
+    print(f"Generuję obraz przy użyciu: {HF_MODEL}...")
+    try:
+        result = client.image_to_image(
+            image=str(source),
+            prompt=image_prompt,
+            model=HF_MODEL,
+        )
+    except StopIteration:
+        raise RuntimeError(
+            "Serwery darmowe Hugging Face całkowicie zablokowały tryb image-to-image (zwracając zbugowany błąd StopIteration). "
+            "Aby to ominąć, podepnij pustą kartę kredytową w ustawieniach HF (to odblokowuje dostęp do stabilniejszych serwerów, "
+            "nawet jeśli nic z niej nie pobiera) lub użyj płatnego klucza."
+        )
+        
     output = Path("virtual-landscaping.png")
     result.save(output)
     return output
