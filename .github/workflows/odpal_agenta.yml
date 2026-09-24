@@ -8,10 +8,17 @@ jobs:
   uruchom-system:
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       issues: write
+
     steps:
       - name: Pobierz kod
         uses: actions/checkout@v4
+
+      - name: Ustaw Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
 
       - name: Zainstaluj biblioteki
         run: pip install requests google-generativeai
@@ -19,8 +26,9 @@ jobs:
       - name: Uruchom Agenta
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          HF_API_KEY: ${{ secrets.HF_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          ISSUE_URL: ${{ github.event.issue.comments_url }}
+          REPO: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
           ISSUE_BODY: ${{ github.event.issue.body }}
         run: python agent.py
