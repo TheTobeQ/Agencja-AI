@@ -72,7 +72,7 @@ def download_source(url: str) -> Path:
     content_type = response.headers.get("content-type", "")
     if not content_type.startswith("image/"):
         raise ValueError("Podany załącznik nie jest obrazem")
-    source = Path("source-image")
+    source = Path("source-image.jpg")
     source.write_bytes(response.content)
     with Image.open(source) as image:
         image.verify()
