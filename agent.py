@@ -29,8 +29,8 @@ ISSUE_NUMBER = os.environ["ISSUE_NUMBER"]
 GITHUB_TOKEN = os.environ["GITHUB_TOKEN"]
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 HF_API_KEY = os.environ.get("HF_API_KEY")
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL") or
-os.environ.get("GOOGLE_MODEL") or "gemini-3.6-flash"
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL") or os.environ.get("GOOGLE_MODEL") or "gemini-3.6-flash"
+HF_MODEL = os.environ.get("HF_MODEL", "stabilityai/stable-diffusion-xl-base-1.0")
 
 if not GEMINI_API_KEY:
     raise RuntimeError("Brak sekretu GEMINI_API_KEY")
