@@ -1,0 +1,85 @@
+# Agencja AI
+
+To repozytorium automatycznie generuje wizualizację „virtual landscaping” dla nieruchomości po otwarciu issue z obrazkiem. System używa:
+- Google Gemini do analizy zdjęcia i tworzenia promptu
+- Hugging Face do wygenerowania obrazu
+- GitHub API do publikacji wyniku w repozytorium
+
+## Jak podłączyć Google AI
+
+1. Wejdź na: https://aistudio.google.com/app/apikey
+2. Wygeneruj klucz API
+3. W GitHub przejdź do:
+   - Settings → Secrets and variables → Actions
+4. Dodaj sekrety:
+   - `GEMINI_API_KEY` = Twój klucz Google AI Studio
+   - `HF_API_KEY` = klucz Hugging Face
+   - `GITHUB_TOKEN` = token GitHub (zwykle jest podawany automatycznie przez GitHub Actions)
+
+Dodatkowo możesz ustawić zmienne:
+- `GEMINI_MODEL=gemini-2.5-flash`
+- `HF_MODEL=stabilityai/stable-diffusion-xl-base-1.0`
+
+W repo są wspierane też nazwy alternatywne:
+- `GOOGLE_API_KEY` zamiast `GEMINI_API_KEY`
+- `HF_TOKEN` zamiast `HF_API_KEY`
+
+## Jak działa workflow
+
+Plik `.github/workflows/odpal_agenta.yml` uruchamia `agent.py` po otwarciu nowego issue.
+
+Workflow wykonuje:
+1. pobranie kodu
+2. instalację bibliotek
+3. odczytanie `ISSUE_BODY`
+4. wyszukanie obrazka w treści issue
+5. analizę obrazu przez Gemini
+6. wygenerowanie wizualizacji przez Hugging Face
+7. zapisanie pliku do repo
+8. dodanie komentarza do issue z linkiem do obrazu
+
+## Lokalny test
+
+Zainstaluj zależności:
+
+```bash
+pip install -r requirements.txt
+```
+
+Ustaw zmienne środowiskowe:
+
+```bash
+export REPO="TheTobeQ/Agencja-AI"
+export ISSUE_NUMBER="1"
+export GITHUB_TOKEN="twój_github_token"
+export GEMINI_API_KEY="twój_klucz_google"
+export HF_API_KEY="twój_klucz_hf"
+export ISSUE_BODY='![dom](https://example.com/house.jpg)'
+export GITHUB_REF_NAME="Agent"
+```
+
+Uruchom:
+
+```bash
+python agent.py
+```
+
+## Ważne uwagi
+
+- Repo jest przygotowane do działania jako GitHub Action, nie jako serwer API.
+- Przy otwarciu issue wymagane jest zdjęcie nieruchomości w treści wpisu.
+- To jest wizualizacja AI — nie musi odzwierciedlać realnego stanu nieruchomości.
+- Jeśli masz problem z kluczem, sprawdź, czy jest poprawnie dodany do GitHub Actions Secrets.
+
+## Wersja krótka
+
+Najważniejsze zmienne do ustawienia:
+
+```bash
+GEMINI_API_KEY=...
+HF_API_KEY=...
+GITHUB_TOKEN=...
+```
+
+Dla Google AI Studio klucz generuje się tutaj:
+https://aistudio.google.com/app/apikey
