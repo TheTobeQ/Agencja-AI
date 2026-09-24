@@ -1,48 +1,163 @@
-import os, re, requests
-import google.generativeai as genai
+"""Two-agent real-estate visualisation pipeline.
 
-# Pobieranie kluczy
-gemini_key = os.environ.get("GEMINI_API_KEY")
-hf_key = os.environ.get("HF_API_KEY")
-issue_body = os.environ.get("ISSUE_BODY", "")
-comments_url = os.environ.get("ISSUE_URL")
-gh_token = os.environ.get("GITHUB_TOKEN")
-
-genai.configure(api_key=gemini_key)
-
-# Szukanie zdjęcia
-image_urls = re.findall(r'(https?://\S+\.(?:jpg|jpeg|png|gif))', issue_body, re.IGNORECASE)
-image_urls_markdown = re.findall(r'!\[.*?\]\((https?://.*?)\)', issue_body)
-urls = image_urls + image_urls_markdown
-
-if not urls:
-    requests.post(comments_url, headers={"Authorization": f"Bearer {gh_token}"}, json={"body": "Hej! Nie widzę zdjęcia. Wrzuć nową ofertę wraz ze zdjęciem!"})
-    exit()
-
-img_url = urls[0]
-img_data = requests.get(img_url).content
-with open("temp.jpg", "wb") as f:
-    f.write(img_data)
-
-# Twój model PRO
-model = genai.GenerativeModel('gemini-3-flash-preview')
-plik = genai.upload_file("temp.jpg")
-
-prompt = """
-Jesteś nieszablonowym Dyrektorem Kreatywnym w agencji nieruchomości z Płocka. Twój cel to 'Pattern Interrupt' na Facebooku. 
-Oto zdjęcie nieruchomości. Wykonaj dwa zadania:
-1. Wymyśl niesamowitą wizję na ulepszenie tego zdjęcia (np. piękny ogród, luksusowe meble). Zapisz tę instrukcję po angielsku w nawiasach kwadratowych, np: [turn the empty room into a luxury living room].
-2. Pod spodem napisz piekielnie angażujący post sprzedażowy na FB (po polsku), odwołujący się do emocji i wygenerowanej wizji. Użyj emotikon.
+The workflow calls this file for a newly opened GitHub issue. Gemini is the
+creative director: it analyses the source photo and produces an English,
+image-editing prompt. Hugging Face then performs the image-to-image edit.
+The result is committed to the repository so that it can be linked from the
+issue (GitHub does not provide a general-purpose file upload API for comments).
 """
 
-odpowiedz = model.generate_content([prompt, plik]).text
-instrukcja_grafika = re.search(r'\[(.*?)\]', odpowiedz)
-post_fb = re.sub(r'\[.*?\]', '', odpowiedz).strip()
+from __future__ import annotations
 
-wynik = f"🔥 **Oto Twój gotowy post (Wersja PRO):**\n\n{post_fb}"
+import base64
+import json
+import os
+import re
+import sys
+from pathlib import Path
+from urllib.parse import quote
 
-if instrukcja_grafika:
-    polecenie = instrukcja_grafika.group(1)
-    wynik += f"\n\n---\n*Instrukcja dla grafika AI: '{polecenie}'. Generowanie obrazu może chwilę potrwać na zewnętrznych serwerach.* 🖼️"
+import requests
+from google import genai
+from google.genai import types
+from huggingface_hub import InferenceClient
+from PIL import Image
 
-requests.post(comments_url, headers={"Authorization": f"Bearer {gh_token}"}, json={"body": wynik})
+GITHUB_API = "https://api.github.com"
+REPO = os.environ["REPO"]
+ISSUE_NUMBER = os.environ["ISSUE_NUMBER"]
+GITHUB_TOKEN = os.environ["GITHUB_TOKEN"]
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+HF_API_KEY = os.environ.get("HF_API_KEY")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+HF_MODEL = os.environ.get("HF_MODEL", "stabilityai/stable-diffusion-xl-base-1.0")
+
+if not GEMINI_API_KEY:
+    raise RuntimeError("Brak sekretu GEMINI_API_KEY")
+if not HF_API_KEY:
+    raise RuntimeError("Brak sekretu HF_API_KEY")
+
+headers = {
+    "Authorization": f"Bearer {GITHUB_TOKEN}",
+    "Accept": "application/vnd.github+json",
+    "X-GitHub-Api-Version": "2022-11-28",
+}
+
+def github_request(method: str, path: str, **kwargs) -> requests.Response:
+    response = requests.request(
+        method, f"{GITHUB_API}{path}", headers=headers, timeout=60, **kwargs
+    )
+    response.raise_for_status()
+    return response
+
+def comment(text: str) -> None:
+    github_request("POST", f"/repos/{REPO}/issues/{ISSUE_NUMBER}/comments", json={"body": text})
+
+def find_image_url(body: str) -> str | None:
+    markdown = re.findall(r"!\[[^]]*]\((https?://[^)]+)\)", body, re.I)
+    html = re.findall(r'<img[^>]+src=["\'](https?://[^"\']+)', body, re.I)
+    bare = re.findall(r"https?://[^\s<>]+", body, re.I)
+    candidates = markdown + html + bare
+    for url in candidates:
+        clean = url.rstrip(".,)")
+        if "github.com" in clean or "githubusercontent.com" in clean or re.search(
+            r"\.(?:jpe?g|png|webp)(?:\?.*)?$", clean, re.I
+        ):
+            return clean
+    return None
+
+def download_source(url: str) -> Path:
+    response = requests.get(url, headers={"User-Agent": "Agencja-AI/1.0"}, timeout=60)
+    response.raise_for_status()
+    content_type = response.headers.get("content-type", "")
+    if not content_type.startswith("image/"):
+        raise ValueError("Podany załącznik nie jest obrazem")
+    source = Path("source-image")
+    source.write_bytes(response.content)
+    with Image.open(source) as image:
+        image.verify()
+    return source
+
+def creative_director(source: Path) -> tuple[str, str]:
+    client = genai.Client(api_key=GEMINI_API_KEY)
+    uploaded = client.files.upload(file=source)
+
+    prompt = """
+Jesteś Dyrektorem Kreatywnym agencji nieruchomości. Przeanalizuj zdjęcie domu.
+Zaproponuj realistyczny virtual landscaping, który zwiększy atrakcyjność oferty.
+Nie wolno zmieniać domu, dachu, okien, ogrodzenia ani perspektywy zdjęcia.
+Zwróć WYŁĄCZNIE poprawny JSON bez markdownu:
+{
+  "image_prompt": "dokładny prompt po angielsku dla modelu image-to-image",
+  "sales_post": "krótki, angażujący post po polsku z uczciwym oznaczeniem, że to wizualizacja"
+}
+W image_prompt koniecznie zaznacz: zachowanie domu i ogrodzenia, zamianę piasku
+na równy zielony trawnik, nowoczesny podjazd z kostki do drzwi oraz kilka małych
+krzewów wzdłuż płotu. Nie dodawaj ludzi, samochodów ani nowych budynków.
+"""
+
+    result = client.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=[prompt, uploaded],
+        config=types.GenerateContentConfig(response_mime_type="application/json"),
+    )
+    data = json.loads(result.text)
+    image_prompt = str(data["image_prompt"]).strip()
+    sales_post = str(data["sales_post"]).strip()
+    if not image_prompt or not sales_post:
+        raise ValueError("Gemini zwrócił niepełną odpowiedź")
+    return image_prompt, sales_post
+
+def render(source: Path, image_prompt: str) -> Path:
+    client = InferenceClient(api_key=HF_API_KEY, timeout=300)
+    result = client.image_to_image(
+        image=str(source),
+        prompt=image_prompt,
+        model=HF_MODEL,
+    )
+    output = Path("virtual-landscaping.png")
+    result.save(output)
+    return output
+
+def publish_image(image: Path) -> str:
+    repo_path = f"generated/issue-{ISSUE_NUMBER}.png"
+    api_path = f"/repos/{REPO}/contents/{quote(repo_path, safe='/')}"
+    encoded = base64.b64encode(image.read_bytes()).decode("ascii")
+    payload = {
+        "message": f"Add virtual landscaping visualisation for issue #{ISSUE_NUMBER}",
+        "content": encoded,
+        "branch": os.environ.get("GITHUB_REF_NAME", "Agent"),
+    }
+    existing = requests.get(f"{GITHUB_API}{api_path}", headers=headers, timeout=60)
+    if existing.ok:
+        payload["sha"] = existing.json()["sha"]
+    response = github_request("PUT", api_path, json=payload)
+    return response.json()["content"]["download_url"]
+
+def main() -> None:
+    body = os.environ.get("ISSUE_BODY", "")
+    url = find_image_url(body)
+    if not url:
+        comment("Nie widzę zdjęcia nieruchomości. Dodaj zdjęcie w treści zgłoszenia i otwórz nowe zgłoszenie.")
+        return
+
+    source = download_source(url)
+    image_prompt, sales_post = creative_director(source)
+    generated = render(source, image_prompt)
+    image_url = publish_image(generated)
+    comment(
+        f"🔥 **Gotowa wizualizacja virtual landscaping**\n\n{sales_post}\n\n"
+        f"[📷 Pobierz / zobacz wygenerowany obraz]({image_url})\n\n"
+        "> ℹ️ To wizualizacja AI — nie przedstawia aktualnego stanu nieruchomości. "
+        "Przed publikacją sprawdź zgodność oferty ze stanem faktycznym."
+    )
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as exc:
+        try:
+            comment(f"❌ Agencja AI nie zakończyła pracy: `{type(exc).__name__}: {exc}`")
+        finally:
+            print(f"ERROR: {exc}", file=sys.stderr)
+        raise
