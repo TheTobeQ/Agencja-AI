@@ -1,11 +1,4 @@
-"""Two-agent real-estate visualisation pipeline.
-
-The workflow calls this file for a newly opened GitHub issue. Gemini is the
-creative director: it analyses the source photo and produces an English,
-image-editing prompt. Hugging Face then performs the image-to-image edit.
-The result is committed to the repository so that it can be linked from the
-issue (GitHub does not provide a general-purpose file upload API for comments).
-"""
+"""Two-agent real-estate visualisation pipeline."""
 
 from __future__ import annotations
 
@@ -30,7 +23,8 @@ GITHUB_TOKEN = os.environ["GITHUB_TOKEN"]
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 HF_API_KEY = os.environ.get("HF_API_KEY")
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL") or os.environ.get("GOOGLE_MODEL") or "gemini-3.6-flash"
-HF_MODEL = os.environ.get("HF_MODEL", "stabilityai/stable-diffusion-xl-base-1.0")
+# Zmiana modelu na taki, który gwarantuje obsługę image-to-image
+HF_MODEL = os.environ.get("HF_MODEL") or "timbrooks/instruct-pix2pix"
 
 if not GEMINI_API_KEY:
     raise RuntimeError("Brak sekretu GEMINI_API_KEY")
@@ -67,7 +61,11 @@ def find_image_url(body: str) -> str | None:
     return None
 
 def download_source(url: str) -> Path:
-    response = requests.get(url, headers={"User-Agent": "Agencja-AI/1.0"}, timeout=60)
+    response = requests.get(
+        url, 
+        headers={"User-Agent": "Agencja-AI/1.0", "Authorization": f"Bearer {GITHUB_TOKEN}"}, 
+        timeout=60
+    )
     response.raise_for_status()
     content_type = response.headers.get("content-type", "")
     if not content_type.startswith("image/"):
