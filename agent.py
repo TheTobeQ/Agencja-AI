@@ -7,6 +7,7 @@ import json
 import os
 import re
 import sys
+import time
 from pathlib import Path
 from urllib.parse import quote
 
@@ -22,8 +23,7 @@ ISSUE_NUMBER = os.environ["ISSUE_NUMBER"]
 GITHUB_TOKEN = os.environ["GITHUB_TOKEN"]
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 HF_API_KEY = os.environ.get("HF_API_KEY")
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL") or os.environ.get("GOOGLE_MODEL") or "gemini-3.6-flash"
-# Zmiana modelu na taki, który gwarantuje obsługę image-to-image
+# Domyślny model HF zoptymalizowany pod edycję obrazów
 HF_MODEL = os.environ.get("HF_MODEL") or "timbrooks/instruct-pix2pix"
 
 if not GEMINI_API_KEY:
@@ -61,6 +61,7 @@ def find_image_url(body: str) -> str | None:
     return None
 
 def download_source(url: str) -> Path:
+    # Używamy autoryzacji do pobierania zdjęć z prywatnych repozytoriów
     response = requests.get(
         url, 
         headers={"User-Agent": "Agencja-AI/1.0", "Authorization": f"Bearer {GITHUB_TOKEN}"}, 
@@ -70,6 +71,7 @@ def download_source(url: str) -> Path:
     content_type = response.headers.get("content-type", "")
     if not content_type.startswith("image/"):
         raise ValueError("Podany załącznik nie jest obrazem")
+    # Zapis z prawidłowym rozszerzeniem zapobiegającym błędowi MIME
     source = Path("source-image.jpg")
     source.write_bytes(response.content)
     with Image.open(source) as image:
@@ -93,12 +95,45 @@ W image_prompt koniecznie zaznacz: zachowanie domu i ogrodzenia, zamianę piasku
 na równy zielony trawnik, nowoczesny podjazd z kostki do drzwi oraz kilka małych
 krzewów wzdłuż płotu. Nie dodawaj ludzi, samochodów ani nowych budynków.
 """
+    
+    # Lista modeli do wypróbowania w razie błędów serwera (Fallback)
+    models_to_try = [
+        os.environ.get("GEMINI_MODEL"),
+        os.environ.get("GOOGLE_MODEL"),
+        "gemini-1.5-pro",
+        "gemini-3.6-flash",
+        "gemini-1.5-flash",
+        "gemini-1.5-pro-latest"
+    ]
+    
+    # Oczyszczanie listy z pustych wartości i duplikatów
+    models = []
+    for m in models_to_try:
+        if m and m not in models:
+            models.append(m)
 
-    result = client.models.generate_content(
-        model=GEMINI_MODEL,
-        contents=[prompt, uploaded],
-        config=types.GenerateContentConfig(response_mime_type="application/json"),
-    )
+    result = None
+    last_error = None
+    
+    # Pętla testująca kolejne modele
+    for model_name in models:
+        try:
+            print(f"Próba użycia modelu: {model_name}...")
+            result = client.models.generate_content(
+                model=model_name,
+                contents=[prompt, uploaded],
+                config=types.GenerateContentConfig(response_mime_type="application/json"),
+            )
+            print(f"Sukces z modelem {model_name}!")
+            break  # Przerywamy pętlę po udanym żądaniu
+        except Exception as e:
+            print(f"Model {model_name} niedostępny ({e}). Szukam dalej...")
+            last_error = e
+            time.sleep(2)  # Krótka pauza zapobiegająca blokadzie rate-limit
+
+    if not result:
+        raise RuntimeError(f"Wszystkie modele Gemini zawiodły. Ostatni błąd: {last_error}")
+
     data = json.loads(result.text)
     image_prompt = str(data["image_prompt"]).strip()
     sales_post = str(data["sales_post"]).strip()
